@@ -1,4 +1,3 @@
-
 import telebot
 from telebot import *
 import webbrowser
@@ -7,6 +6,10 @@ import sqlite3
 from datetime import datetime, timedelta
 import logging
 import time
+import ssl
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,7 +17,17 @@ logger = logging.getLogger(__name__)
 
 user_data = {}
 
+# Создаем сессию с отключенной проверкой SSL (для обхода ошибок)
+session = requests.Session()
+session.verify = False
+# Отключаем предупреждения о SSL
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
+# Устанавливаем сессию с отключенным SSL
+bot.session = session
+
 name = None
 
 # Список администраторов (ID пользователей Telegram)
@@ -103,18 +116,33 @@ def get_booked_times(booking_date):
 
 
 def safe_delete_message(chat_id, message_id):
-    """Безопасное удаление сообщения"""
+    """Безопасное удаление сообщения с обработкой SSL ошибок"""
     try:
         if chat_id and message_id:
-            bot.delete_message(chat_id, message_id)
-            return True
+            # Пробуем удалить с повторными попытками
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    bot.delete_message(chat_id, message_id)
+                    return True
+                except Exception as e:
+                    error_str = str(e)
+                    # Если ошибка SSL, ждем и пробуем снова
+                    if "SSL" in error_str or "decryption" in error_str:
+                        logger.warning(f"SSL ошибка при удалении, попытка {attempt + 1}/{max_retries}")
+                        time.sleep(1)
+                        continue
+                    elif "message to delete not found" in error_str:
+                        logger.debug(f"Сообщение {message_id} уже было удалено")
+                        return False
+                    else:
+                        logger.error(f"Не удалось удалить сообщение {message_id}: {e}")
+                        return False
+            logger.warning(f"Не удалось удалить сообщение {message_id} после {max_retries} попыток")
+            return False
     except Exception as e:
-        # Игнорируем ошибку "message to delete not found"
-        if "message to delete not found" in str(e):
-            logger.debug(f"Сообщение {message_id} уже было удалено")
-        else:
-            logger.error(f"Не удалось удалить сообщение {message_id}: {e}")
-    return False
+        logger.error(f"Критическая ошибка при удалении сообщения {message_id}: {e}")
+        return False
 
 
 def notify_admins(message_text):
@@ -536,12 +564,6 @@ def callback(call):
                 reply_markup=markup
             )
 
-        elif call.data == "send_name":
-            name = call.from_user.first_name
-            if call.from_user.last_name:
-                name += " " + call.from_user.last_name
-            complete_booking(user_id, name, call)
-
         elif call.data == "manual_name":
             if user_id not in user_data:
                 user_data[user_id] = {}
@@ -643,8 +665,6 @@ def handle_messages(message):
                 )
 
                 markup = types.InlineKeyboardMarkup(row_width=1)
-                btn_name = types.InlineKeyboardButton("👤 Отправить имя из профиля", callback_data="send_name")
-                markup.row(btn_name)
                 btn_manual_name = types.InlineKeyboardButton("✏️ Ввести имя вручную", callback_data="manual_name")
                 markup.row(btn_manual_name)
                 back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_booking")
@@ -654,7 +674,7 @@ def handle_messages(message):
 
                 bot.send_message(
                     message.chat.id,
-                    f"Теперь введите ваше имя или нажмите кнопку:",
+                    f"Теперь введите ваше имя:",
                     reply_markup=markup
                 )
             return
@@ -682,8 +702,6 @@ def handle_messages(message):
             bot.send_message(message.chat.id, f"✅ Номер сохранён: {phone}", reply_markup=markup_remove)
 
             markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_name = types.InlineKeyboardButton("👤 Отправить имя из профиля", callback_data="send_name")
-            markup.row(btn_name)
             btn_manual_name = types.InlineKeyboardButton("✏️ Ввести имя вручную", callback_data="manual_name")
             markup.row(btn_manual_name)
             back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_booking")
@@ -693,7 +711,7 @@ def handle_messages(message):
 
             bot.send_message(
                 message.chat.id,
-                f"Теперь введите ваше имя или нажмите кнопку:",
+                f"Теперь введите ваше имя:",
                 reply_markup=markup
             )
         else:
