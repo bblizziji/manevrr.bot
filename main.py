@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import logging
 import time
 import requests
-import pytz
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13,7 +12,6 @@ logger = logging.getLogger(__name__)
 user_data = {}
 
 import urllib3
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 session = requests.Session()
@@ -23,17 +21,25 @@ bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
 bot.session = session
 
 ADMINS = [819284226, 8837073941]
-MSK_TZ = pytz.timezone('Europe/Moscow')
 
 
 def get_current_hour_msk():
-    now_msk = datetime.now(MSK_TZ)
+    """Возвращает текущий час по МСК (UTC+3)"""
+    now_utc = datetime.utcnow()
+    now_msk = now_utc + timedelta(hours=3)
     return now_msk.hour
+
+
+def get_current_datetime_msk():
+    """Возвращает текущую дату и время по МСК"""
+    now_utc = datetime.utcnow()
+    now_msk = now_utc + timedelta(hours=3)
+    return now_msk
 
 
 def get_available_dates():
     dates = []
-    now_msk = datetime.now(MSK_TZ)
+    now_msk = get_current_datetime_msk()
     current_hour = now_msk.hour
 
     if current_hour < 23:
@@ -43,7 +49,7 @@ def get_available_dates():
         'Monday': 'ПН', 'Tuesday': 'ВТ', 'Wednesday': 'СР',
         'Thursday': 'ЧТ', 'Friday': 'ПТ', 'Saturday': 'СБ', 'Sunday': 'ВС'
     }
-
+    
     for i in range(1, 8):
         future_date = now_msk + timedelta(days=i)
         date_str = future_date.strftime("%d.%m.%Y")
@@ -118,9 +124,7 @@ def get_booked_times(booking_date):
     conn = sqlite3.connect('bookings.db')
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            'SELECT booking_time_start, booking_time_end FROM bookings WHERE booking_date = ? AND status = "active"',
-            (booking_date,))
+        cursor.execute('SELECT booking_time_start, booking_time_end FROM bookings WHERE booking_date = ? AND status = "active"', (booking_date,))
         booked_times = cursor.fetchall()
     except:
         booked_times = []
@@ -196,9 +200,7 @@ def show_my_bookings(chat_id, user_id):
     conn = sqlite3.connect('bookings.db')
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            'SELECT id, booking_date, booking_time_start, booking_time_end, created_at, status FROM bookings WHERE user_id = ? ORDER BY created_at DESC',
-            (user_id,))
+        cursor.execute('SELECT id, booking_date, booking_time_start, booking_time_end, created_at, status FROM bookings WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
         bookings = cursor.fetchall()
     except:
         bookings = []
@@ -217,8 +219,7 @@ def show_my_bookings(chat_id, user_id):
             text += f"   ID: #{booking_id}\n\n"
 
             if status == "active":
-                cancel_btn = types.InlineKeyboardButton(f"❌ Отменить бронь #{booking_id}",
-                                                        callback_data=f"cancel_{booking_id}")
+                cancel_btn = types.InlineKeyboardButton(f"❌ Отменить бронь #{booking_id}", callback_data=f"cancel_{booking_id}")
                 markup.row(cancel_btn)
 
         back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")
@@ -244,20 +245,19 @@ def show_booking_dates(chat_id):
 
 
 def show_start_time_menu(chat_id, user_id):
-    """Показывает меню выбора времени начала"""
     booking_date = user_data[user_id].get('booking_date')
     is_today = user_data[user_id].get('is_today', False)
-
+    
     markup = types.InlineKeyboardMarkup(row_width=4)
     times = []
-
+    
     booked_intervals = get_booked_times(booking_date) if booking_date else []
     current_hour = get_current_hour_msk()
-
+    
     min_start_hour = 16
     if is_today:
         min_start_hour = max(16, current_hour + 1)
-
+    
     for hour in range(min_start_hour, 24):
         is_booked = False
         for booked_start, booked_end in booked_intervals:
@@ -273,7 +273,7 @@ def show_start_time_menu(chat_id, user_id):
         if not is_booked:
             time_str = f"{hour:02d}:00"
             times.append(types.InlineKeyboardButton(time_str, callback_data=f"start_{time_str}"))
-
+    
     if not times:
         markup = types.InlineKeyboardMarkup()
         back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_dates")
@@ -282,15 +282,15 @@ def show_start_time_menu(chat_id, user_id):
         markup.row(menu_btn)
         bot.send_message(chat_id, "❌ Нет доступного времени для бронирования.", reply_markup=markup)
         return
-
+    
     for i in range(0, len(times), 4):
-        markup.row(*times[i:i + 4])
-
+        markup.row(*times[i:i+4])
+    
     back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_dates")
     menu_btn = types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")
     markup.row(back_btn)
     markup.row(menu_btn)
-
+    
     if is_today:
         current_hour = get_current_hour_msk()
         bot.send_message(
@@ -310,26 +310,25 @@ def show_start_time_menu(chat_id, user_id):
 
 
 def show_end_time_menu(chat_id, user_id):
-    """Показывает меню выбора времени окончания"""
     booking_date = user_data[user_id].get('booking_date')
     is_today = user_data[user_id].get('is_today', False)
     start_time = user_data[user_id].get('booking_time_start')
-
+    
     if not start_time:
         return
-
+    
     start_hour = int(start_time.split(":")[0])
-
+    
     markup = types.InlineKeyboardMarkup(row_width=4)
     times = []
-
+    
     booked_intervals = get_booked_times(booking_date) if booking_date else []
     current_hour = get_current_hour_msk()
-
+    
     min_end_hour = start_hour + 1
     if is_today:
         min_end_hour = max(min_end_hour, current_hour + 1)
-
+    
     for hour in range(min_end_hour, 24):
         is_booked = False
         for booked_start, booked_end in booked_intervals:
@@ -345,7 +344,7 @@ def show_end_time_menu(chat_id, user_id):
         if not is_booked:
             time_str = f"{hour:02d}:00"
             times.append(types.InlineKeyboardButton(time_str, callback_data=f"end_{time_str}"))
-
+    
     # Проверяем 00:00
     is_booked = False
     for booked_start, booked_end in booked_intervals:
@@ -360,26 +359,24 @@ def show_end_time_menu(chat_id, user_id):
                 continue
     if not is_booked and (not is_today or (is_today and current_hour < 23)):
         times.append(types.InlineKeyboardButton("00:00", callback_data="end_00:00"))
-
+    
     if not times:
         markup = types.InlineKeyboardMarkup()
-        # ВАЖНО! Здесь кнопка "Назад" ведет к выбору времени начала
         back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_start")
         menu_btn = types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")
         markup.row(back_btn)
         markup.row(menu_btn)
         bot.send_message(chat_id, "❌ Нет доступного времени для окончания.", reply_markup=markup)
         return
-
+    
     for i in range(0, len(times), 4):
-        markup.row(*times[i:i + 4])
-
-    # ВАЖНО! Здесь кнопка "Назад" ведет к выбору времени начала
+        markup.row(*times[i:i+4])
+    
     back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_start")
     menu_btn = types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")
     markup.row(back_btn)
     markup.row(menu_btn)
-
+    
     bot.send_message(
         chat_id,
         f"📅 Дата: {booking_date}\n"
@@ -404,19 +401,16 @@ def callback(call):
         chat_id = call.message.chat.id
         user_id = call.from_user.id
 
-        # Удаляем сообщение с кнопками
         safe_delete_message(chat_id, call.message.message_id)
 
         # ===== НАВИГАЦИЯ =====
-
-        # Главное меню
+        
         if call.data == "back_to_menu":
             if user_id in user_data:
                 user_data.pop(user_id, None)
             show_main_menu(chat_id)
             return
-
-        # Назад к выбору даты (из выбора времени начала)
+        
         if call.data == "back_to_dates":
             if user_id in user_data:
                 user_data[user_id].pop('booking_time_start', None)
@@ -424,8 +418,7 @@ def callback(call):
                 user_data[user_id]['state'] = 'selecting_date'
             show_booking_dates(chat_id)
             return
-
-        # Назад к выбору времени начала (из выбора времени окончания)
+        
         if call.data == "back_to_start":
             if user_id in user_data:
                 user_data[user_id].pop('booking_time_end', None)
@@ -479,35 +472,30 @@ def callback(call):
             user_data[user_id] = {'state': 'selecting_date'}
             show_booking_dates(chat_id)
 
-        # ===== ВЫБОР ДАТЫ =====
-
         elif call.data.startswith("date_"):
-            days_map = {"date_1": 1, "date_2": 2, "date_3": 3, "date_4": 4,
-                        "date_5": 5, "date_6": 6, "date_7": 7}
-
+            days_map = {"date_1": 1, "date_2": 2, "date_3": 3, "date_4": 4, 
+                       "date_5": 5, "date_6": 6, "date_7": 7}
+            
             is_today = call.data == "date_today"
             days = 0 if is_today else days_map.get(call.data, 1)
-
-            booking_date = (datetime.now(MSK_TZ) + timedelta(days=days)).strftime("%d.%m.%Y")
-
+            
+            now_msk = get_current_datetime_msk()
+            booking_date = (now_msk + timedelta(days=days)).strftime("%d.%m.%Y")
+            
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]['booking_date'] = booking_date
             user_data[user_id]['is_today'] = is_today
             user_data[user_id]['state'] = 'selecting_start_time'
-
+            
             show_start_time_menu(chat_id, user_id)
-
-        # ===== ВЫБОР ВРЕМЕНИ НАЧАЛА =====
 
         elif call.data.startswith("start_") and user_data.get(user_id, {}).get('state') == 'selecting_start_time':
             start_time = call.data.replace("start_", "")
             user_data[user_id]['booking_time_start'] = start_time
             user_data[user_id]['state'] = 'selecting_end_time'
-
+            
             show_end_time_menu(chat_id, user_id)
-
-        # ===== ВЫБОР ВРЕМЕНИ ОКОНЧАНИЯ =====
 
         elif call.data.startswith("end_") and user_data.get(user_id, {}).get('state') == 'selecting_end_time':
             end_time = call.data.replace("end_", "")
@@ -540,8 +528,6 @@ def callback(call):
                 reply_markup=markup
             )
 
-        # ===== ВВОД ИМЕНИ =====
-
         elif call.data == "manual_name":
             if user_id not in user_data:
                 user_data[user_id] = {}
@@ -555,12 +541,8 @@ def callback(call):
 
             bot.send_message(chat_id, "✏️ Введите ваше имя:", reply_markup=markup)
 
-        # ===== МОИ БРОНИ =====
-
         elif call.data == "books":
             show_my_bookings(chat_id, user_id)
-
-        # ===== ОТМЕНА БРОНИ =====
 
         elif call.data.startswith("cancel_"):
             booking_id = int(call.data.replace("cancel_", ""))
@@ -650,7 +632,7 @@ def handle_messages(message):
             bot.send_message(message.chat.id, f"✅ Номер сохранён: {phone}", reply_markup=markup_remove)
 
             markup = types.InlineKeyboardMarkup(row_width=1)
-            btn_manual_name = types.InlineKeyboardButton("✏️ Ввести имя", callback_data="manual_name")
+            btn_manual_name = types.InlineKeyboardButton("✏️ Ввести имя вручную", callback_data="manual_name")
             markup.row(btn_manual_name)
             back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_dates")
             menu_btn = types.InlineKeyboardButton("🏠 Главное меню", callback_data="back_to_menu")
