@@ -1,3 +1,4 @@
+
 import telebot
 from telebot import *
 import webbrowser
@@ -10,6 +11,7 @@ import ssl
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
+import pytz
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,6 +24,7 @@ session = requests.Session()
 session.verify = False
 # Отключаем предупреждения о SSL
 import urllib3
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
@@ -31,7 +34,44 @@ bot.session = session
 name = None
 
 # Список администраторов (ID пользователей Telegram)
-ADMINS = [819284226]  # Убедитесь, что эти ID правильные
+ADMINS = [819284226,8837073941]  # Убедитесь, что эти ID правильные
+
+# Устанавливаем часовой пояс МСК
+MSK_TZ = pytz.timezone('Europe/Moscow')
+
+
+def get_current_hour_msk():
+    """Возвращает текущий час по МСК"""
+    now_msk = datetime.now(MSK_TZ)
+    return now_msk.hour
+
+
+def get_available_dates():
+    """Возвращает список доступных дат для бронирования (сегодня + 7 дней)"""
+    dates = []
+    now_msk = datetime.now(MSK_TZ)
+    current_hour = now_msk.hour
+
+    # Сегодняшняя дата
+    today = now_msk.strftime("%d.%m.%Y")
+
+    # Если сейчас меньше 23:00, то сегодня еще можно бронировать
+    if current_hour < 23:
+        dates.append(("today", "Сегодня"))
+
+    # Добавляем следующие 7 дней
+    for i in range(1, 8):
+        future_date = now_msk + timedelta(days=i)
+        date_str = future_date.strftime("%d.%m.%Y")
+        day_name = future_date.strftime("%A")
+        # Переводим день недели на русский
+        days_ru = {
+            'Monday': 'ПН', 'Tuesday': 'ВТ', 'Wednesday': 'СР',
+            'Thursday': 'ЧТ', 'Friday': 'ПТ', 'Saturday': 'СБ', 'Sunday': 'ВС'
+        }
+        dates.append((f"date_{i}", f"{date_str} ({days_ru.get(day_name, day_name)})"))
+
+    return dates
 
 
 def init_db():
@@ -183,7 +223,7 @@ def complete_booking(user_id, name, call=None):
     notify_admins(admin_message)
 
     bot.send_message(user_id,
-                     f"✅ Бронь подтверждена!\n\n"f"📅 Дата: {booking_date}\n"f"🕐 Время: {booking_time_start} - {booking_time_end}\n"f"👤 Имя: {name}\n"f"📱 Телефон: {phone}\n\n"f"Скоро с вами свяжется менеджер.")
+                     f"✅ Бронь подтверждена!\n\n"f"📅 Дата: {booking_date}\n"f"🕐 Время: {booking_time_start} - {booking_time_end}\n"f"👤 Имя: {name}\n"f"📱 Телефон: {phone}\n\n")
     user_data.pop(user_id, None)
 
 
@@ -274,8 +314,8 @@ def main(message):
     show_main_menu(message.chat.id)
 
 
-def generate_time_buttons(chat_id, start_hour=16, end_hour=23, booking_date=None):
-    """Генерирует кнопки с временем для выбора, исключая занятое время"""
+def generate_time_buttons(chat_id, start_hour=16, end_hour=23, booking_date=None, is_today=False):
+    """Генерирует кнопки с временем для выбора, исключая занятое время и прошедшие часы для сегодня"""
     markup = types.InlineKeyboardMarkup(row_width=4)
     times = []
 
@@ -284,9 +324,17 @@ def generate_time_buttons(chat_id, start_hour=16, end_hour=23, booking_date=None
     if booking_date:
         booked_intervals = get_booked_times(booking_date)
 
+    # Получаем текущий час по МСК
+    current_hour = get_current_hour_msk()
+    if is_today:
+        # Для сегодняшнего дня минимальный час - текущий час + 1
+        min_start_hour = max(start_hour, current_hour + 1)
+    else:
+        min_start_hour = start_hour
+
     # Создаем список доступных часов
     available_hours = []
-    for hour in range(start_hour, end_hour + 1):
+    for hour in range(min_start_hour, end_hour + 1):
         # Проверяем, не занят ли этот час
         is_booked = False
         for booked_start, booked_end in booked_intervals:
@@ -315,7 +363,10 @@ def generate_time_buttons(chat_id, start_hour=16, end_hour=23, booking_date=None
         markup.row(back_btn)
         markup.row(menu_btn)
         if booking_date:
-            bot.send_message(chat_id, "❌ К сожалению, на эту дату все время уже занято. Выберите другую дату.")
+            if is_today:
+                bot.send_message(chat_id, "❌ На сегодня все время уже занято или прошло. Выберите другую дату.")
+            else:
+                bot.send_message(chat_id, "❌ К сожалению, на эту дату все время уже занято. Выберите другую дату.")
         return markup
 
     # Разбиваем по 4 кнопки в ряд
@@ -423,24 +474,45 @@ def callback(call):
                 "date_6day_after": 7
             }
 
-            days = days_map.get(call.data, 1)
-            booking_date = (datetime.now() + timedelta(days=days)).strftime("%d.%m.%Y")
+            # Проверяем, является ли выбранная дата сегодняшней
+            is_today = call.data == "date_today"
+
+            if is_today:
+                days = 0
+            else:
+                days = days_map.get(call.data, 1)
+
+            booking_date = (datetime.now(MSK_TZ) + timedelta(days=days)).strftime("%d.%m.%Y")
 
             if user_id not in user_data:
                 user_data[user_id] = {}
             user_data[user_id]['booking_date'] = booking_date
             user_data[user_id]['state'] = 'selecting_start_time'
+            user_data[user_id]['is_today'] = is_today
 
-            # Показываем выбор времени начала с учетом занятых слотов
-            markup = generate_time_buttons(chat_id, 16, 23, booking_date)
-            bot.send_message(
-                chat_id,
-                f"📅 Дата: {booking_date}\n\n"
-                "🕐 Выберите время НАЧАЛА бронирования:\n"
-                "⏰ Работаем с 16:00 до 00:00\n"
-                "❌ Занятое время не отображается",
-                reply_markup=markup
-            )
+            # Показываем выбор времени начала с учетом занятых слотов и текущего времени для сегодня
+            markup = generate_time_buttons(chat_id, 16, 23, booking_date, is_today)
+
+            if is_today:
+                current_hour = get_current_hour_msk()
+                bot.send_message(
+                    chat_id,
+                    f"📅 Дата: {booking_date} (СЕГОДНЯ)\n\n"
+                    f"🕐 Выберите время НАЧАЛА бронирования:\n"
+                    f"⏰ Работаем с 16:00 до 00:00\n"
+                    f"⏰ Текущее время: {current_hour:02d}:00 по МСК\n"
+                    f"❌ Занятое и прошедшее время не отображается",
+                    reply_markup=markup
+                )
+            else:
+                bot.send_message(
+                    chat_id,
+                    f"📅 Дата: {booking_date}\n\n"
+                    "🕐 Выберите время НАЧАЛА бронирования:\n"
+                    "⏰ Работаем с 16:00 до 00:00\n"
+                    "❌ Занятое время не отображается",
+                    reply_markup=markup
+                )
 
         elif call.data.startswith("time_") and user_data.get(user_id, {}).get('state') == 'selecting_start_time':
             # Обработка выбора времени начала
@@ -450,6 +522,7 @@ def callback(call):
 
             booking_date = user_data[user_id]['booking_date']
             start_hour = int(selected_time.split(":")[0])
+            is_today = user_data[user_id].get('is_today', False)
 
             markup = types.InlineKeyboardMarkup(row_width=4)
             times = []
@@ -457,8 +530,16 @@ def callback(call):
             # Получаем занятые интервалы для даты
             booked_intervals = get_booked_times(booking_date)
 
+            # Определяем минимальный час для окончания
+            current_hour = get_current_hour_msk()
+            min_end_hour = start_hour + 1
+
+            # Если сегодня, проверяем, чтобы время окончания не было в прошлом
+            if is_today:
+                min_end_hour = max(min_end_hour, current_hour + 1)
+
             # Добавляем доступные часы для окончания
-            for hour in range(start_hour + 1, 24):
+            for hour in range(min_end_hour, 24):
                 time_str = f"{hour:02d}:00"
                 is_booked = False
                 for booked_start, booked_end in booked_intervals:
@@ -487,7 +568,9 @@ def callback(call):
                     except (ValueError, AttributeError):
                         continue
             if not is_booked:
-                times.append(types.InlineKeyboardButton("00:00", callback_data="end_time_00:00"))
+                # Проверяем, не прошло ли время для сегодня
+                if not is_today or (is_today and current_hour < 23):
+                    times.append(types.InlineKeyboardButton("00:00", callback_data="end_time_00:00"))
 
             # Если нет доступных часов для окончания
             if not times:
@@ -503,7 +586,7 @@ def callback(call):
                 )
                 # Возвращаем к выбору времени начала
                 user_data[user_id]['state'] = 'selecting_start_time'
-                markup = generate_time_buttons(chat_id, 16, 23, booking_date)
+                markup = generate_time_buttons(chat_id, 16, 23, booking_date, is_today)
                 bot.send_message(
                     chat_id,
                     f"📅 Дата: {booking_date}\n\n"
@@ -612,32 +695,16 @@ def callback(call):
 
 def show_booking_dates(chat_id):
     """Показывает выбор даты для бронирования"""
-    tomorrow_date1 = (datetime.now() + timedelta(days=1)).strftime("%d.%m.%Y")
-    tomorrow_date2 = (datetime.now() + timedelta(days=2)).strftime("%d.%m.%Y")
-    tomorrow_date3 = (datetime.now() + timedelta(days=3)).strftime("%d.%m.%Y")
-    tomorrow_date4 = (datetime.now() + timedelta(days=4)).strftime("%d.%m.%Y")
-    tomorrow_date5 = (datetime.now() + timedelta(days=5)).strftime("%d.%m.%Y")
-    tomorrow_date6 = (datetime.now() + timedelta(days=6)).strftime("%d.%m.%Y")
-    tomorrow_date7 = (datetime.now() + timedelta(days=7)).strftime("%d.%m.%Y")
+    markup = types.InlineKeyboardMarkup(row_width=1)
 
-    btn6 = types.InlineKeyboardButton(f"{tomorrow_date1}", callback_data="date_tomorrow")
-    btn7 = types.InlineKeyboardButton(f"{tomorrow_date2}", callback_data="date_1day_after")
-    btn8 = types.InlineKeyboardButton(f"{tomorrow_date3}", callback_data="date_2day_after")
-    btn9 = types.InlineKeyboardButton(f"{tomorrow_date4}", callback_data="date_3day_after")
-    btn10 = types.InlineKeyboardButton(f"{tomorrow_date5}", callback_data="date_4day_after")
-    btn11 = types.InlineKeyboardButton(f"{tomorrow_date6}", callback_data="date_5day_after")
-    btn12 = types.InlineKeyboardButton(f"{tomorrow_date7}", callback_data="date_6day_after")
+    # Получаем доступные даты
+    available_dates = get_available_dates()
+
+    for date_key, date_label in available_dates:
+        btn = types.InlineKeyboardButton(date_label, callback_data=date_key)
+        markup.row(btn)
 
     back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.row(btn6)
-    markup.row(btn7)
-    markup.row(btn8)
-    markup.row(btn9)
-    markup.row(btn10)
-    markup.row(btn11)
-    markup.row(btn12)
     markup.row(back_btn)
 
     bot.send_message(chat_id, "📅 Выберите дату бронирования:", reply_markup=markup)
