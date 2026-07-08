@@ -1,7 +1,7 @@
 import telebot
 from telebot import *
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import time
 import requests
@@ -25,14 +25,14 @@ ADMINS = [819284226, 8837073941]
 
 def get_current_hour_msk():
     """Возвращает текущий час по МСК (UTC+3)"""
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
     now_msk = now_utc + timedelta(hours=3)
     return now_msk.hour
 
 
 def get_current_datetime_msk():
     """Возвращает текущую дату и время по МСК"""
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
     now_msk = now_utc + timedelta(hours=3)
     return now_msk
 
@@ -80,6 +80,7 @@ def init_db():
         booking_date TEXT,
         booking_time_start TEXT,
         booking_time_end TEXT,
+        table_type TEXT,
         created_at TEXT,
         status TEXT DEFAULT 'active'
     )''')
@@ -88,6 +89,8 @@ def init_db():
         cur.execute('ALTER TABLE bookings ADD COLUMN booking_time_start TEXT')
     if 'booking_time_end' not in columns:
         cur.execute('ALTER TABLE bookings ADD COLUMN booking_time_end TEXT')
+    if 'table_type' not in columns:
+        cur.execute('ALTER TABLE bookings ADD COLUMN table_type TEXT')
     if 'status' not in columns:
         cur.execute('ALTER TABLE bookings ADD COLUMN status TEXT DEFAULT "active"')
 
@@ -99,12 +102,12 @@ def init_db():
 init_db()
 
 
-def add_booking(user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end):
+def add_booking(user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end, table_type):
     conn = sqlite3.connect('bookings.db')
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO bookings (user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end, created_at, status) 
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                   (user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end,
+    cursor.execute('''INSERT INTO bookings (user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end, table_type, created_at, status) 
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (user_id, username, first_name, last_name, phone, booking_date, booking_time_start, booking_time_end, table_type,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'active'))
     conn.commit()
     conn.close()
@@ -155,16 +158,19 @@ def complete_booking(user_id, name, call=None):
     booking_date = user_data_item.get('booking_date')
     booking_time_start = user_data_item.get('booking_time_start')
     booking_time_end = user_data_item.get('booking_time_end')
+    table_type = user_data_item.get('table_type')
     phone = user_data_item.get('phone')
 
-    if not booking_date or not booking_time_start or not booking_time_end or not phone:
+    if not booking_date or not booking_time_start or not booking_time_end or not table_type or not phone:
         bot.send_message(user_id, "❌ Ошибка! Попробуйте начать заново.")
         return
 
     add_booking(user_id=user_id, username=call.from_user.username if call else None, first_name=name, last_name="",
                 phone=phone, booking_date=booking_date, booking_time_start=booking_time_start,
-                booking_time_end=booking_time_end)
+                booking_time_end=booking_time_end, table_type=table_type)
 
+    # Отправка админу с указанием стола
+    table_emoji = "🇷🇺" if table_type == "Русский бильярд" else "🎱"
     admin_message = (
         f"🆕 НОВАЯ БРОНЬ!\n\n"
         f"👤 Имя: {name}\n"
@@ -172,12 +178,19 @@ def complete_booking(user_id, name, call=None):
         f"📱 Username: @{call.from_user.username if call and call.from_user.username else 'нет'}\n"
         f"🆔 ID: {user_id}\n"
         f"📅 Дата: {booking_date}\n"
-        f"🕐 Время: {booking_time_start} - {booking_time_end}"
+        f"🕐 Время: {booking_time_start} - {booking_time_end}\n"
+        f"{table_emoji} Стол: {table_type}"
     )
     notify_admins(admin_message)
 
     bot.send_message(user_id,
-                     f"✅ Бронь подтверждена!\n\n"f"📅 Дата: {booking_date}\n"f"🕐 Время: {booking_time_start} - {booking_time_end}\n"f"👤 Имя: {name}\n"f"📱 Телефон: {phone}\n\n")
+                     f"✅ Бронь подтверждена!\n\n"
+                     f"📅 Дата: {booking_date}\n"
+                     f"🕐 Время: {booking_time_start} - {booking_time_end}\n"
+                     f"{table_emoji} Стол: {table_type}\n"
+                     f"👤 Имя: {name}\n"
+                     f"📱 Телефон: {phone}\n\n"
+                     f"Скоро с вами свяжется менеджер.")
     user_data.pop(user_id, None)
 
 
@@ -200,7 +213,7 @@ def show_my_bookings(chat_id, user_id):
     conn = sqlite3.connect('bookings.db')
     cursor = conn.cursor()
     try:
-        cursor.execute('SELECT id, booking_date, booking_time_start, booking_time_end, created_at, status FROM bookings WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
+        cursor.execute('SELECT id, booking_date, booking_time_start, booking_time_end, table_type, created_at, status FROM bookings WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
         bookings = cursor.fetchall()
     except:
         bookings = []
@@ -211,10 +224,12 @@ def show_my_bookings(chat_id, user_id):
         markup = types.InlineKeyboardMarkup(row_width=1)
 
         for booking in bookings:
-            booking_id, date, start_time, end_time, created, status = booking
+            booking_id, date, start_time, end_time, table_type, created, status = booking
             status_emoji = "✅" if status == "active" else "❌"
             status_text = "Активна" if status == "active" else "Отменена"
+            table_emoji = "🇷🇺" if table_type == "Русский бильярд" else "🎱"
             text += f"{status_emoji} {date} {start_time}-{end_time}\n"
+            text += f"   {table_emoji} {table_type}\n"
             text += f"   Статус: {status_text}\n"
             text += f"   ID: #{booking_id}\n\n"
 
@@ -239,9 +254,22 @@ def show_booking_dates(chat_id):
     for date_key, date_label in available_dates:
         btn = types.InlineKeyboardButton(date_label, callback_data=date_key)
         markup.row(btn)
-    back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")
+    back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_table")
     markup.row(back_btn)
     bot.send_message(chat_id, "📅 Выберите дату бронирования:", reply_markup=markup)
+
+
+def show_table_type_menu(chat_id, user_id):
+    """Показывает выбор типа стола (ПЕРВЫЙ ШАГ)"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🇷🇺 Русский бильярд", callback_data="table_russian")
+    btn2 = types.InlineKeyboardButton("🎱 Пул", callback_data="table_pool")
+    markup.row(btn1, btn2)
+    
+    back_btn = types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")
+    markup.row(back_btn)
+    
+    bot.send_message(chat_id, "🎯 Выберите тип стола:", reply_markup=markup)
 
 
 def show_start_time_menu(chat_id, user_id):
@@ -345,7 +373,6 @@ def show_end_time_menu(chat_id, user_id):
             time_str = f"{hour:02d}:00"
             times.append(types.InlineKeyboardButton(time_str, callback_data=f"end_{time_str}"))
     
-    # Проверяем 00:00
     is_booked = False
     for booked_start, booked_end in booked_intervals:
         if booked_start and booked_end:
@@ -411,6 +438,16 @@ def callback(call):
             show_main_menu(chat_id)
             return
         
+        if call.data == "back_to_table":
+            if user_id in user_data:
+                user_data[user_id].pop('booking_date', None)
+                user_data[user_id].pop('booking_time_start', None)
+                user_data[user_id].pop('booking_time_end', None)
+                user_data[user_id].pop('is_today', None)
+                user_data[user_id]['state'] = 'selecting_table'
+            show_table_type_menu(chat_id, user_id)
+            return
+        
         if call.data == "back_to_dates":
             if user_id in user_data:
                 user_data[user_id].pop('booking_time_start', None)
@@ -469,8 +506,24 @@ def callback(call):
         elif call.data == "bron":
             if user_id in user_data:
                 user_data.pop(user_id, None)
-            user_data[user_id] = {'state': 'selecting_date'}
+            user_data[user_id] = {'state': 'selecting_table'}
+            show_table_type_menu(chat_id, user_id)
+
+        # ===== ВЫБОР ТИПА СТОЛА (ПЕРВЫЙ ШАГ) =====
+
+        elif call.data == "table_russian":
+            if user_id in user_data:
+                user_data[user_id]['table_type'] = "Русский бильярд"
+                user_data[user_id]['state'] = 'selecting_date'
             show_booking_dates(chat_id)
+
+        elif call.data == "table_pool":
+            if user_id in user_data:
+                user_data[user_id]['table_type'] = "Пул"
+                user_data[user_id]['state'] = 'selecting_date'
+            show_booking_dates(chat_id)
+
+        # ===== ВЫБОР ДАТЫ =====
 
         elif call.data.startswith("date_"):
             days_map = {"date_1": 1, "date_2": 2, "date_3": 3, "date_4": 4, 
@@ -490,12 +543,16 @@ def callback(call):
             
             show_start_time_menu(chat_id, user_id)
 
+        # ===== ВЫБОР ВРЕМЕНИ НАЧАЛА =====
+
         elif call.data.startswith("start_") and user_data.get(user_id, {}).get('state') == 'selecting_start_time':
             start_time = call.data.replace("start_", "")
             user_data[user_id]['booking_time_start'] = start_time
             user_data[user_id]['state'] = 'selecting_end_time'
             
             show_end_time_menu(chat_id, user_id)
+
+        # ===== ВЫБОР ВРЕМЕНИ ОКОНЧАНИЯ =====
 
         elif call.data.startswith("end_") and user_data.get(user_id, {}).get('state') == 'selecting_end_time':
             end_time = call.data.replace("end_", "")
@@ -504,6 +561,7 @@ def callback(call):
 
             booking_date = user_data[user_id]['booking_date']
             start_time = user_data[user_id]['booking_time_start']
+            table_type = user_data[user_id]['table_type']
 
             start_hour = int(start_time.split(":")[0])
             end_hour = int(end_time.split(":")[0])
@@ -519,14 +577,18 @@ def callback(call):
             btn_back = types.KeyboardButton("🔙 Назад в меню")
             markup.add(btn_back)
 
+            table_emoji = "🇷🇺" if table_type == "Русский бильярд" else "🎱"
             bot.send_message(
                 chat_id,
                 f"📅 Дата: {booking_date}\n"
                 f"🕐 Время: {start_time} - {end_time}\n"
+                f"{table_emoji} Стол: {table_type}\n"
                 f"⏱ Продолжительность: {duration} час(а/ов)\n\n"
                 "📱 Пожалуйста, отправьте ваш номер телефона",
                 reply_markup=markup
             )
+
+        # ===== ВВОД ИМЕНИ =====
 
         elif call.data == "manual_name":
             if user_id not in user_data:
@@ -541,8 +603,12 @@ def callback(call):
 
             bot.send_message(chat_id, "✏️ Введите ваше имя:", reply_markup=markup)
 
+        # ===== МОИ БРОНИ =====
+
         elif call.data == "books":
             show_my_bookings(chat_id, user_id)
+
+        # ===== ОТМЕНА БРОНИ =====
 
         elif call.data.startswith("cancel_"):
             booking_id = int(call.data.replace("cancel_", ""))
