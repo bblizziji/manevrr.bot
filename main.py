@@ -20,7 +20,7 @@ session.verify = False
 bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
 bot.session = session
 
-ADMINS = [819284226, 8837073941]
+ADMINS = [819284226,8837073941,576205495]
 
 
 def get_current_hour_msk():
