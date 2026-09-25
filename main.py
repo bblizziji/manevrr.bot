@@ -1,5 +1,5 @@
 import telebot
-from telebot import *
+from telebot import types
 import sqlite3
 from datetime import datetime, timedelta, timezone
 import logging
@@ -11,17 +11,9 @@ logger = logging.getLogger(__name__)
 
 user_data = {}
 
-import urllib3
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-session = requests.Session()
-session.verify = False
-
 bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
-bot.session = session
 
-ADMINS = [819284226,8837073941, 576205495]
+ADMINS = [819284226, 8837073941, 576205495]
 
 
 def get_current_hour_msk():
@@ -581,6 +573,9 @@ def main(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     try:
+        # ✅ ОБЯЗАТЕЛЬНО: отвечаем на callback, чтобы кнопка не "грузилась" вечно
+        bot.answer_callback_query(call.id)
+
         if not hasattr(call, 'data'):
             return
 
@@ -641,6 +636,7 @@ def callback(call):
                 chat_id,
                 "💰 ТАРИФЫ\n\n"
                 "ПЕРВЫЙ ЧАС БЕСПЛАТНО ЗА ОТЗЫВ\n\n"
+                "🎱 БИЛЬЯРД\n\n"
                 "🏢 ПО БУДНЯМ (ПН-ЧТ):\n"
                 "• 1 час — 600 ₽\n"
                 "• 2 часа — 1200 ₽\n"
@@ -648,7 +644,12 @@ def callback(call):
                 "🎉 ПО ВЫХОДНЫМ (ПТ-ВС):\n"
                 "• 1 час — 1000 ₽\n"
                 "• 2 часа — 2000 ₽\n"
-                "• 3 часа — 3000 ₽\n\n",
+                "• 3 часа — 3000 ₽\n\n"
+                "🎲 КОМНАТА ДЛЯ НАСТОЛЬНЫХ ИГР\n\n"
+                "🏢 ПО БУДНЯМ (ПН-ЧТ):\n"
+                "• 1 час — 300 ₽\n\n"
+                "🎉 ПО ВЫХОДНЫМ (ПТ-ВС):\n"
+                "• 1 час — 500 ₽\n\n",
                 reply_markup=markup
             )
 
@@ -923,6 +924,6 @@ def handle_messages(message):
 if __name__ == "__main__":
     try:
         logger.info("🤖 Бот запущен!")
-        bot.polling(none_stop=True)
+        bot.polling(none_stop=True, skip_pending=True, timeout=60)
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
