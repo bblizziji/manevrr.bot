@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 user_data = {}
 
-bot = telebot.TeleBot("8889296379:AAF0B3-SGaOQuvQuOzMsjqKyfMZ9x3UAX_o")
+bot = telebot.TeleBot("8889296379:AAGRcYR_3t_fbLW3puoPyJcnLqTKCERJ9qQ")
 
 ADMINS = [819284226, 8837073941, 576205495]
 
