@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 user_data = {}
 
 # Токен берется из переменных окружения хостинга. 
-bot = telebot.TeleBot(os.getenv("BOT_TOKEN", "8889296379:AAGRcYR_3t_fbLW3puoPyJcnLqTKCERJ9qQ"))
+bot = telebot.TeleBot(os.getenv("BOT_TOKEN", "8889296379:AAHK0mZtkKNIf41V9tyKkhYaAEcAtOJBOjs"))
 
 ADMINS = [819284226, 8837073941, 576205495]
 
